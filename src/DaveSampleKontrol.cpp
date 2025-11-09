@@ -4,86 +4,83 @@
 // - Connects to WiFi (fallback to AP mode)
 // - Exposes a simple HTTP API and a small web UI to view/toggle an LED
 //
-// Replace WIFI_SSID / WIFI_PASSWORD with your network credentials or keep blank
-// to force AP-only mode.
+// Create a header file named WiFiCredentials in the include folder that contains .
+// static const char* WIFI_SSID     = "YOUR_SSID";
+// static const char* WIFI_PASSWORD = "YOUR_PASSWORD";
+
+#include "WiFiCredentials.h"
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
 
-static const char* WIFI_SSID     = "YOUR_SSID";
-static const char* WIFI_PASSWORD = "YOUR_PASSWORD";
-
 static const int LED_PIN = 17; // Built-in LED
-static const int BUTTON_S1_PIN = 15; // Top-left switch
-static const int BUTTON_S2_PIN = 16; // Top-right switch
-static const int BUTTON_S3_PIN = 8; // Bottom-left switch
-static const int BUTTON_S4_PIN = 5; // Bottom-right switch
+
+// Replace individual button defines with arrays
+static const int BUTTON_COUNT = 4;
+static const int BUTTON_PINS[BUTTON_COUNT] = {
+    46, // S1 top-left
+    45, // S2 top-right
+    21, // S3 bottom-left
+    9   // S4 bottom-right
+};
+
 WebServer server(80);
 
 unsigned long startMillis = 0;
-bool ledState = false;
-bool s1State = false;
-bool s2State = false;
-bool s3State = false;
-bool s4State = false;
+
+// make the switch states volatile so ISR/loop visibility is correct
+volatile bool ledState = false;
+// sState == true means "pressed" (hardware uses INPUT_PULLUP: pressed -> LOW)
+volatile bool sState[BUTTON_COUNT] = {false, false, false, false};
 
 const unsigned long DEBOUNCE_DELAY_MS = 50;
-volatile unsigned long buttonS1LastChangeTime = 0;
-volatile unsigned long buttonS2LastChangeTime = 0;
-volatile unsigned long buttonS3LastChangeTime = 0;
-volatile unsigned long buttonS4LastChangeTime = 0;
 
-// Interrupt Service Routines (ISR)
-void ARDUINO_ISR_ATTR buttonS1ISR() {
-  unsigned long now = millis();
-  if ((now - buttonS1LastChangeTime) > DEBOUNCE_DELAY_MS) {
-    s1State = digitalRead(BUTTON_S1_PIN) == LOW ? false : true;
-  }
-  buttonS1LastChangeTime = now;
-}
+// robust ISR-side info: last ISR tick + last observed level
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
-void ARDUINO_ISR_ATTR buttonS2ISR() {
-  unsigned long now = millis();
-  if ((now - buttonS2LastChangeTime) > DEBOUNCE_DELAY_MS) {
-    s2State = digitalRead(BUTTON_S2_PIN) == LOW ? false : true;
-  }
-  buttonS2LastChangeTime = now;
-}
-void ARDUINO_ISR_ATTR buttonS3ISR() {
-  unsigned long now = millis();
-  if ((now - buttonS3LastChangeTime) > DEBOUNCE_DELAY_MS) {
-    s3State = digitalRead(BUTTON_S3_PIN) == LOW ? false : true;
-  }
-  buttonS3LastChangeTime = now;
-}
-void ARDUINO_ISR_ATTR buttonS4ISR() {
-  unsigned long now = millis();
-  if ((now - buttonS4LastChangeTime) > DEBOUNCE_DELAY_MS) {
-    s4State = digitalRead(BUTTON_S4_PIN) == LOW ? false : true;
-  }
-  buttonS4LastChangeTime = now;
+volatile TickType_t buttonLastISRTick[BUTTON_COUNT] = {0};
+volatile uint8_t buttonLastLevel[BUTTON_COUNT] = {HIGH, HIGH, HIGH, HIGH};
+volatile bool buttonFlag[BUTTON_COUNT] = {false, false, false, false};
+
+// Common ISR handler called by tiny wrappers (keep ISRs short)
+static inline void IRAM_ATTR buttonISR_common(int idx)
+{
+    // capture tick and last observed level in an ISR-safe way
+    buttonLastISRTick[idx] = xTaskGetTickCountFromISR();
+    // digitalRead is small and safe here for GPIO level
+    buttonLastLevel[idx] = digitalRead(BUTTON_PINS[idx]);
+    buttonFlag[idx] = true;
 }
 
-String getStatusJson() {
+// Small ISR wrappers to allow passing an index (avoids code duplication later)
+static void IRAM_ATTR buttonISR_0() { buttonISR_common(0); }
+static void IRAM_ATTR buttonISR_1() { buttonISR_common(1); }
+static void IRAM_ATTR buttonISR_2() { buttonISR_common(2); }
+static void IRAM_ATTR buttonISR_3() { buttonISR_common(3); }
+
+String getStatusJson()
+{
     String json = "{";
     json += "\"uptime_ms\":" + String(millis() - startMillis) + ",";
     json += "\"wifi_mode\":\"" + String(WiFi.getMode() == WIFI_MODE_AP ? "AP" : "STA") + "\",";
     json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
     json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
     json += "\"led\":" + String(ledState ? "true" : "false");
-    json += ",\"s1\":" + String(s1State ? "true" : "false");
-    json += ",\"s2\":" + String(s2State ? "true" : "false");
-    json += ",\"s3\":" + String(s3State ? "true" : "false");
-    json += ",\"s4\":" + String(s4State ? "true" :  "false");
+    for (int i = 0; i < BUTTON_COUNT; ++i)
+    {
+        json += ",\"s" + String(i + 1) + "\":" + String(sState[i] ? "true" : "false");
+    }
     json += "}";
     return json;
 }
 
-void handleRoot() {
+void handleRoot()
+{
     // Simple single-file web UI (small HTML + JS)
-    const char* html =
+    const char *html =
         "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
         "<title>Dave Sample Kontrol</title>"
         "<style>body{font-family:Arial,Helvetica,sans-serif;margin:1rem}button{padding:.5rem 1rem;font-size:1rem}</style>"
@@ -103,17 +100,20 @@ void handleRoot() {
     server.send(200, "text/html", html);
 }
 
-void handleStatus() {
+void handleStatus()
+{
     server.send(200, "application/json", getStatusJson());
 }
 
-void handleToggle() {
+void handleToggle()
+{
     ledState = !ledState;
     digitalWrite(LED_PIN, ledState ? HIGH : LOW);
     server.send(200, "application/json", getStatusJson());
 }
 
-void handleNotFound() {
+void handleNotFound()
+{
     String message = "Not found\n\n";
     message += "URI: ";
     message += server.uri();
@@ -123,7 +123,8 @@ void handleNotFound() {
     server.send(404, "text/plain", message);
 }
 
-void startAPMode() {
+void startAPMode()
+{
     String apName = "DaveSK-" + String((uint32_t)ESP.getEfuseMac(), HEX).substring(10);
     WiFi.mode(WIFI_MODE_AP);
     WiFi.softAP(apName.c_str());
@@ -131,8 +132,10 @@ void startAPMode() {
     Serial.printf("Started AP '%s' IP=%s\n", apName.c_str(), apIP.toString().c_str());
 }
 
-void connectWiFi() {
-    if (strlen(WIFI_SSID) == 0) {
+void connectWiFi()
+{
+    if (strlen(WIFI_SSID) == 0)
+    {
         Serial.println("No SSID configured, starting AP mode");
         startAPMode();
         return;
@@ -144,39 +147,49 @@ void connectWiFi() {
 
     unsigned long start = millis();
     const unsigned long timeout = 10000; // 10s
-    while (WiFi.status() != WL_CONNECTED && (millis() - start) < timeout) {
+    while (WiFi.status() != WL_CONNECTED && (millis() - start) < timeout)
+    {
         Serial.print(".");
         delay(250);
     }
     Serial.println();
 
-    if (WiFi.status() == WL_CONNECTED) {
+    if (WiFi.status() == WL_CONNECTED)
+    {
         Serial.print("Connected. IP=");
         Serial.println(WiFi.localIP());
-        if (MDNS.begin("rigkontrol")) {
+        if (MDNS.begin("rigkontrol"))
+        {
             Serial.println("mDNS responder started: rigkontrol.local");
         }
-    } else {
+    }
+    else
+    {
         Serial.println("Failed to connect, starting AP mode");
         startAPMode();
     }
 }
 
-void setup() {
+void setup()
+{
     Serial.begin(115200);
     delay(100);
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
 
-    pinMode(BUTTON_S1_PIN, INPUT_PULLUP); 
-    pinMode(BUTTON_S2_PIN, INPUT_PULLUP); 
-    pinMode(BUTTON_S3_PIN, INPUT_PULLUP);
-    pinMode(BUTTON_S4_PIN, INPUT_PULLUP);
+    for (int i = 0; i < BUTTON_COUNT; ++i)
+    {
+        pinMode(BUTTON_PINS[i], INPUT_PULLUP);
+    }
 
-    attachInterrupt(digitalPinToInterrupt(BUTTON_S1_PIN), buttonS1ISR, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(BUTTON_S2_PIN), buttonS2ISR, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(BUTTON_S3_PIN), buttonS3ISR, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(BUTTON_S4_PIN), buttonS4ISR, CHANGE);
+    // table of ISR wrappers so we can attach in a loop
+    using ISRFunc = void (*)();
+    static const ISRFunc buttonISRs[BUTTON_COUNT] = {
+        buttonISR_0, buttonISR_1, buttonISR_2, buttonISR_3};
+    for (int i = 0; i < BUTTON_COUNT; ++i)
+    {
+        attachInterrupt(digitalPinToInterrupt(BUTTON_PINS[i]), buttonISRs[i], CHANGE);
+    }
 
     startMillis = millis();
 
@@ -193,13 +206,49 @@ void setup() {
     Serial.println("Open / in a browser (or rigkontrol.local if mDNS is working)");
 }
 
-void loop() {
+// Helper run in loop() to process pending ISR flags and perform debouncing/read
+static void processButtonFlags(unsigned long now)
+{
+    // convert current time to ticks once
+    TickType_t nowTicks = xTaskGetTickCount();
+    const TickType_t debounceTicks = pdMS_TO_TICKS(DEBOUNCE_DELAY_MS);
+
+    for (int i = 0; i < BUTTON_COUNT; ++i)
+    {
+        if (!buttonFlag[i])
+            continue;
+        // only accept as stable if enough time elapsed since last ISR for this pin
+        if ((nowTicks - buttonLastISRTick[i]) >= debounceTicks)
+        {
+            // commit last observed level as stable state
+            // INPUT_PULLUP: LOW == pressed -> sState should be true when pressed
+            sState[i] = (buttonLastLevel[i] == LOW) ? true : false;
+            // clear activity indicators
+            buttonFlag[i] = false;
+            buttonLastISRTick[i] = 0;
+        }
+        // else: keep waiting until debounce window after the most recent ISR has passed
+    }
+}
+
+void loop()
+{
     server.handleClient();
+    unsigned long now = millis();
+
+    // Process button changes coming from ISRs (debounce & update stable state)
+    processButtonFlags(now);
+
     // optional: update mDNS (ESPmDNS handles itself mostly)
     // small blink to indicate running: toggle every second
     static unsigned long lastBlink = 0;
-    if (millis() - lastBlink >= 1000) {
-        lastBlink = millis();
-        Serial.printf("Switch values S1 %s, S2 %s, S3 %s, S4 %s\n", s1State ? "ON" : "OFF", s2State ? "ON" : "OFF", s3State ? "ON" : "OFF", s4State ? "ON" : "OFF");
+    if (now - lastBlink >= 1000)
+    {
+        lastBlink = now;
+        Serial.printf("Switch values S1 %s, S2 %s, S3 %s, S4 %s\n",
+                      sState[0] ? "ON" : "OFF",
+                      sState[1] ? "ON" : "OFF",
+                      sState[2] ? "ON" : "OFF",
+                      sState[3] ? "ON" : "OFF");
     }
 }
