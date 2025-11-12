@@ -9,6 +9,7 @@
 // WIFI_PASSWORD = "YOUR_PASSWORD";
 
 #include "WiFiCredentials.h"
+#include "lib_button.hpp"
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -18,8 +19,8 @@
 static const int LED_PIN = 17;  // Built-in LED
 
 // Replace individual button defines with arrays
-static const int BUTTON_COUNT              = 4;
-static const int BUTTON_PINS[BUTTON_COUNT] = {
+static const uint8_t BUTTON_COUNT              = 4;
+static const uint8_t BUTTON_PINS[BUTTON_COUNT] = {
     46,  // S1 top-left
     45,  // S2 top-right
     21,  // S3 bottom-left
@@ -34,39 +35,6 @@ unsigned long startMillis = 0;
 volatile bool ledState = false;
 // sState == true means "pressed" (hardware uses INPUT_PULLUP: pressed -> LOW)
 volatile bool sState[BUTTON_COUNT] = {false, false, false, false};
-
-const unsigned long DEBOUNCE_DELAY_MS = 50;
-
-// robust ISR-side info: last ISR tick + last observed level
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
-
-volatile TickType_t buttonLastISRTick[BUTTON_COUNT] = {0};
-volatile uint8_t    buttonLastLevel[BUTTON_COUNT]   = {HIGH, HIGH, HIGH, HIGH};
-volatile bool       buttonFlag[BUTTON_COUNT] = {false, false, false, false};
-
-// Common ISR handler called by tiny wrappers (keep ISRs short)
-static inline void IRAM_ATTR buttonISR_common(int idx) {
-  // capture tick and last observed level in an ISR-safe way
-  buttonLastISRTick[idx] = xTaskGetTickCountFromISR();
-  // digitalRead is small and safe here for GPIO level
-  buttonLastLevel[idx] = digitalRead(BUTTON_PINS[idx]);
-  buttonFlag[idx]      = true;
-}
-
-// Small ISR wrappers to allow passing an index (avoids code duplication later)
-static void IRAM_ATTR buttonISR_0() {
-  buttonISR_common(0);
-}
-static void IRAM_ATTR buttonISR_1() {
-  buttonISR_common(1);
-}
-static void IRAM_ATTR buttonISR_2() {
-  buttonISR_common(2);
-}
-static void IRAM_ATTR buttonISR_3() {
-  buttonISR_common(3);
-}
 
 String getStatusJson() {
   String json = "{";
@@ -176,21 +144,11 @@ void connectWiFi() {
 void setup() {
   Serial.begin(115200);
   delay(100);
+  
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
 
-  for (int i = 0; i < BUTTON_COUNT; ++i) {
-    pinMode(BUTTON_PINS[i], INPUT_PULLUP);
-  }
-
-  // table of ISR wrappers so we can attach in a loop
-  using ISRFunc                                 = void (*)();
-  static const ISRFunc buttonISRs[BUTTON_COUNT] = {buttonISR_0, buttonISR_1,
-                                                   buttonISR_2, buttonISR_3};
-  for (int i = 0; i < BUTTON_COUNT; ++i) {
-    attachInterrupt(digitalPinToInterrupt(BUTTON_PINS[i]), buttonISRs[i],
-                    CHANGE);
-  }
+  Button_init(BUTTON_PINS, BUTTON_COUNT, true);
 
   startMillis = millis();
 
@@ -208,34 +166,15 @@ void setup() {
       "Open / in a browser (or rigkontrol.local if mDNS is working)");
 }
 
-// Helper run in loop() to process pending ISR flags and perform debouncing/read
-static void processButtonFlags(unsigned long now) {
-  // convert current time to ticks once
-  TickType_t       nowTicks      = xTaskGetTickCount();
-  const TickType_t debounceTicks = pdMS_TO_TICKS(DEBOUNCE_DELAY_MS);
-
-  for (int i = 0; i < BUTTON_COUNT; ++i) {
-    if (!buttonFlag[i]) continue;
-    // only accept as stable if enough time elapsed since last ISR for this pin
-    if ((nowTicks - buttonLastISRTick[i]) >= debounceTicks) {
-      // commit last observed level as stable state
-      // INPUT_PULLUP: LOW == pressed -> sState should be true when pressed
-      sState[i] = (buttonLastLevel[i] == LOW) ? true : false;
-      // clear activity indicators
-      buttonFlag[i]        = false;
-      buttonLastISRTick[i] = 0;
-    }
-    // else: keep waiting until debounce window after the most recent ISR has
-    // passed
-  }
-}
-
 void loop() {
   server.handleClient();
   unsigned long now = millis();
 
   // Process button changes coming from ISRs (debounce & update stable state)
-  processButtonFlags(now);
+  Button_update();
+  for (int i = 0; i < BUTTON_COUNT; ++i) {
+    sState[i] = Button_isDown(i);
+  }
 
   // optional: update mDNS (ESPmDNS handles itself mostly)
   // small blink to indicate running: toggle every second
