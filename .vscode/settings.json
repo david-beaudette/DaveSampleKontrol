@@ -8,5 +8,15 @@
     "editor.defaultFormatter": "xaver.clang-format"
   },
   "clang-format.executable": "C:\\Program Files\\LLVM\\bin\\clang-format.exe",
-  "clang-format.style": "file"
+  "clang-format.style": "file",
+  "files.associations": {
+    "array": "cpp",
+    "deque": "cpp",
+    "string": "cpp",
+    "unordered_map": "cpp",
+    "unordered_set": "cpp",
+    "vector": "cpp",
+    "string_view": "cpp",
+    "initializer_list": "cpp"
+  }
 }

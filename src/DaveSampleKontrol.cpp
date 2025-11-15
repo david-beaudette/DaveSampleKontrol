@@ -10,11 +10,16 @@
 
 #include "WiFiCredentials.h"
 #include "lib_button.hpp"
+#include "DFRobotDFPlayerMini.h"
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
+
+// DF player connected to Serial1
+#define FPSerial Serial1
+DFRobotDFPlayerMini mp3player;
 
 static const int LED_PIN = 17;  // Built-in LED
 
@@ -143,8 +148,9 @@ void connectWiFi() {
 
 void setup() {
   Serial.begin(115200);
+  FPSerial.begin(9600, SERIAL_8N1, /*rx =*/5, /*tx =*/8);
   delay(100);
-  
+
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
 
@@ -164,6 +170,23 @@ void setup() {
   Serial.println("HTTP server started on port 80");
   Serial.println(
       "Open / in a browser (or rigkontrol.local if mDNS is working)");
+  Serial.println();
+  Serial.println(F("DFRobot DFPlayer Mini Demo"));
+  Serial.println(F("Initializing DFPlayer ... (May take 3~5 seconds)"));
+
+  if (!mp3player.begin(
+          FPSerial, /*isACK = */ true,
+          /*doReset = */ true)) {  // Use serial to communicate with mp3.
+    Serial.println(F("Unable to begin:"));
+    Serial.println(F("1.Please recheck the connection!"));
+    Serial.println(F("2.Please insert the SD card!"));
+
+  } else {
+    Serial.println(F("DFPlayer Mini online."));
+
+    mp3player.volume(10);  // Set volume value. From 0 to 30
+    mp3player.play(1);     // Play the first mp3
+  }
 }
 
 void loop() {
