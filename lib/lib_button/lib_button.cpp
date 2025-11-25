@@ -9,11 +9,13 @@
  *
  * When compiled for AVR the library will register PCINTs for pins that
  * support them and set a lightweight ISR flag when a pin-change occurs.
- * Button_update() will then read pin states and run the usual logic.
+ * updateButtons() will then read pin states and run the usual logic.
  *
  * For non-AVR platforms or pins without PCINT support the library falls
- * back to polling (reads every Button_update()).
+ * back to polling (reads every updateButtons()).
  */
+
+#include "lib_button.hpp"
 
 #include <Arduino.h>
 
@@ -64,7 +66,7 @@ static bool              hasPCINT[MAX_BUTTONS];
  * count: number of pins (<= MAX_BUTTONS)
  * internal pullup is enabled by default (active-low buttons).
  */
-void Button_init(const uint8_t* pins, const uint8_t count, bool usePullup) {
+void initButtons(const uint8_t* pins, const uint8_t count, bool usePullup) {
   if (count > MAX_BUTTONS) {
     btnCount = MAX_BUTTONS;
   } else {
@@ -151,13 +153,13 @@ void Button_init(const uint8_t* pins, const uint8_t count, bool usePullup) {
 /*
  * Configure timing parameters (milliseconds).
  */
-void Button_setDebounce(uint16_t ms) {
+void setButtonDebounceTimeMs(uint16_t ms) {
   debounceDelay = ms;
 }
-void Button_setLongPress(uint16_t ms) {
+void setButtonLongPressTimeMs(uint16_t ms) {
   longPressTime = ms;
 }
-void Button_setDoubleClick(uint16_t ms) {
+void setButtonDoubleClickTimeMs(uint16_t ms) {
   doubleClickTime = ms;
 }
 
@@ -168,7 +170,7 @@ void Button_setDoubleClick(uint16_t ms) {
  * With AVR+PCINTs: this only re-reads pins when ISR flagged anyPinChange
  * (lightweight). Pins without PCINT support are polled every call.
  */
-void Button_update() {
+void updateButtons(volatile bool* sState) {
   unsigned long now = millis();
 
 #if defined(__AVR__)
@@ -261,6 +263,7 @@ void Button_update() {
       clickCount[i]      = 0;
       lastPressMillis[i] = 0;
     }
+    sState[i] = checkIfButtonDown(i);
   }
 }
 
@@ -269,33 +272,33 @@ void Button_update() {
  * isDown returns current debounced state without clearing events.
  */
 
-bool Button_isDown(uint8_t idx) {
+bool checkIfButtonDown(uint8_t idx) {
   if (idx >= btnCount) return false;
   return stableState[idx];
 }
 
-bool Button_wasPressed(uint8_t idx) {
+bool checkIfButtonWasPressed(uint8_t idx) {
   if (idx >= btnCount) return false;
   bool v          = evtPressed[idx];
   evtPressed[idx] = false;
   return v;
 }
 
-bool Button_wasReleased(uint8_t idx) {
+bool checkIfButtonWasReleased(uint8_t idx) {
   if (idx >= btnCount) return false;
   bool v           = evtReleased[idx];
   evtReleased[idx] = false;
   return v;
 }
 
-bool Button_wasLongPressed(uint8_t idx) {
+bool checkIfButtonWasLongPressed(uint8_t idx) {
   if (idx >= btnCount) return false;
   bool v            = evtLongPress[idx];
   evtLongPress[idx] = false;
   return v;
 }
 
-bool Button_wasDoubleClicked(uint8_t idx) {
+bool checkIfButtonWasDoubleClicked(uint8_t idx) {
   if (idx >= btnCount) return false;
   bool v              = evtDoubleClick[idx];
   evtDoubleClick[idx] = false;
@@ -305,7 +308,7 @@ bool Button_wasDoubleClicked(uint8_t idx) {
 /*
  * Convenience: clear all pending events.
  */
-void Button_clearAllEvents() {
+void clearAllButtonEvents() {
   for (uint8_t i = 0; i < btnCount; ++i) {
     evtPressed[i] = evtReleased[i] = evtLongPress[i] = evtDoubleClick[i] =
         false;
@@ -315,7 +318,7 @@ void Button_clearAllEvents() {
 /*
  * Optional: return number of configured buttons.
  */
-uint8_t Button_count() {
+uint8_t countButtons() {
   return btnCount;
 }
 

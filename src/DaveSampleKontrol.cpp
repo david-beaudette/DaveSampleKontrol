@@ -148,13 +148,13 @@ void connectWiFi() {
 
 void setup() {
   Serial.begin(115200);
-  FPSerial.begin(9600, SERIAL_8N1, /*rx =*/5, /*tx =*/8);
+  FPSerial.begin(9600, SERIAL_8N1, RX1, TX1);
   delay(100);
 
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
 
-  Button_init(BUTTON_PINS, BUTTON_COUNT, true);
+  initButtons(BUTTON_PINS, BUTTON_COUNT, true);
 
   startMillis = millis();
 
@@ -194,10 +194,7 @@ void loop() {
   unsigned long now = millis();
 
   // Process button changes coming from ISRs (debounce & update stable state)
-  Button_update();
-  for (int i = 0; i < BUTTON_COUNT; ++i) {
-    sState[i] = Button_isDown(i);
-  }
+  updateButtons(sState);
 
   // optional: update mDNS (ESPmDNS handles itself mostly)
   // small blink to indicate running: toggle every second
