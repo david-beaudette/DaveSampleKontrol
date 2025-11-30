@@ -9,18 +9,18 @@
 // WIFI_PASSWORD = "YOUR_PASSWORD";
 
 #include "lib_button.hpp"
-#include "DFRobotDFPlayerMini.h"
-
+#include "lib_mp3.hpp"
 #include "lib_server.hpp"
 #include <Arduino.h>
 
-// DF player connected to Serial1
-#define FPSerial Serial1
-DFRobotDFPlayerMini mp3player;
+// MP3 players
+static MP3Player mp3Reader1(1, RX1, TX1);
+static MP3Player mp3Reader2(2, 8, 5);
 
-static const int LED_PIN = 17;  // Built-in LED
+// Built-in LED (not visible outside pedalboard case)
+static const int LED_PIN = 17;
 
-// Replace individual button defines with arrays
+// 4 pedalboard buttons
 static const uint8_t BUTTON_COUNT              = 4;
 static const uint8_t BUTTON_PINS[BUTTON_COUNT] = {
     46,  // S1 top-left
@@ -31,14 +31,44 @@ static const uint8_t BUTTON_PINS[BUTTON_COUNT] = {
 
 unsigned long startMillis = 0;
 
-// make the switch states volatile so ISR/loop visibility is correct
-volatile bool ledState = false;
-// sState == true means "pressed" (hardware uses INPUT_PULLUP: pressed -> LOW)
+// Buttons and LED state trackers
+volatile bool ledState             = false;
 volatile bool sState[BUTTON_COUNT] = {false, false, false, false};
+
+// Manage button-driven actions for MP3 players.
+// - Updates button state (debounce + events)
+// - S1 (idx 0): player1 LEFT -> toggle play/pause
+// - S2 (idx 1): player1 RIGHT -> stop
+// - S3 (idx 2): player2 LEFT -> toggle play/pause
+// - S4 (idx 3): player2 RIGHT -> stop
+static void manageButtonActions() {
+  // Update debounced states and generate events
+  updateButtons(sState);
+
+  // Player 1: S1 (0) = left (toggle), S2 (1) = right (stop)
+  if (checkIfButtonWasPressed(0)) {
+    mp3Reader1.togglePlayPause();
+  }
+  if (checkIfButtonWasPressed(1)) {
+    mp3Reader1.stopPlayback();
+  }
+
+  // Player 2: S3 (2) = left (toggle), S4 (3) = right (stop)
+  if (checkIfButtonWasPressed(2)) {
+    mp3Reader2.togglePlayPause();
+  }
+  if (checkIfButtonWasPressed(3)) {
+    mp3Reader2.stopPlayback();
+  }
+
+  // Note: checkIfButtonWasPressed() clears the "pressed" event for that
+  // button automatically when it returns true, satisfying the "clear
+  // the button press events after they have been managed" requirement.
+}
 
 void setup() {
   Serial.begin(115200);
-  FPSerial.begin(9600, SERIAL_8N1, RX1, TX1);
+  // MP3 instance already constructed; give it a moment to settle
   delay(100);
 
   pinMode(LED_PIN, OUTPUT);
@@ -48,25 +78,31 @@ void setup() {
 
   startMillis = millis();
 
-  // initialize WiFi + HTTP server (library moved to lib_server)
-  serverInit(&ledState, sState, BUTTON_COUNT, &startMillis);
+  // Initialize WiFi + HTTP server
+  serverInit(&ledState, sState, BUTTON_COUNT, startMillis);
 
   Serial.println();
-  Serial.println(F("DFRobot DFPlayer Mini Demo"));
-  Serial.println(F("Initializing DFPlayer ... (May take 3~5 seconds)"));
+  Serial.println(F("Dave Sample Kontrol Starting..."));
+  Serial.println(F("Initializing mp3 players ... (May take 3~5 seconds)"));
 
-  if (!mp3player.begin(
-          FPSerial, /*isACK = */ true,
-          /*doReset = */ true)) {  // Use serial to communicate with mp3.
-    Serial.println(F("Unable to begin:"));
+  if (!mp3Reader1.begin()) {
+    Serial.println(F("Unable to connect to mp3 player 1:"));
     Serial.println(F("1.Please recheck the connection!"));
     Serial.println(F("2.Please insert the SD card!"));
-
   } else {
-    Serial.println(F("DFPlayer Mini online."));
+    Serial.println(F("mp3 player 1 is online."));
+    mp3Reader1.setVolume(10);  // Set volume value. From 0 to 30
+    mp3Reader1.play(1);        // Play the first mp3
+  }
 
-    mp3player.volume(10);  // Set volume value. From 0 to 30
-    mp3player.play(1);     // Play the first mp3
+  if (!mp3Reader2.begin()) {
+    Serial.println(F("Unable to connect to mp3 player 2:"));
+    Serial.println(F("1.Please recheck the connection!"));
+    Serial.println(F("2.Please insert the SD card!"));
+  } else {
+    Serial.println(F("mp3 player 2 is online."));
+    mp3Reader2.setVolume(10);  // Set volume value. From 0 to 30
+    mp3Reader2.play(1);        // Play the first mp3
   }
 }
 
@@ -74,8 +110,8 @@ void loop() {
   serverHandleClient();
   unsigned long now = millis();
 
-  // Process button changes coming from ISRs (debounce & update stable state)
-  updateButtons(sState);
+  // Process button changes and take action
+  manageButtonActions();
 
   // optional: update mDNS (ESPmDNS handles itself mostly)
   // small blink to indicate running: toggle every second

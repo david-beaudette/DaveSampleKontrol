@@ -16,16 +16,16 @@
 static WebServer server(80);
 
 // pointers to external state (supplied by main app)
-static volatile bool* g_ledPtr         = nullptr;
-static volatile bool* g_sStatePtr      = nullptr;
-static uint8_t        g_btnCount       = 0;
-static unsigned long* g_startMillisPtr = nullptr;
+static volatile bool* g_ledPtr      = nullptr;
+static volatile bool* g_sStatePtr   = nullptr;
+static uint8_t        g_btnCount    = 0;
+static unsigned long  g_startMillis = 0;  // copy instead of pointer
 
 static const char* kMdnsNameDefault = "rigkontrol";
 
 static String buildStatusJson() {
   unsigned long uptime = 0;
-  if (g_startMillisPtr) uptime = millis() - *g_startMillisPtr;
+  uptime               = millis() - g_startMillis;
 
   String json = "{";
   json += "\"uptime_ms\":" + String(uptime) + ",";
@@ -160,28 +160,16 @@ void serverStart(void) {
 /* Public API */
 
 void serverInit(volatile bool* ledPtr, volatile bool* sStatePtr,
-                uint8_t btnCount, unsigned long* startMillisPtr) {
-  g_ledPtr         = ledPtr;
-  g_sStatePtr      = sStatePtr;
-  g_btnCount       = btnCount;
-  g_startMillisPtr = startMillisPtr;
+                uint8_t btnCount, unsigned long startMillis) {
+  g_ledPtr      = ledPtr;
+  g_sStatePtr   = sStatePtr;
+  g_btnCount    = btnCount;
+  g_startMillis = startMillis;
 
-  // Connect WiFi (attempt STA, fallback to AP)
   serverConnectWiFi();
-
-  // Start HTTP server and register routes
   serverStart();
 }
 
 void serverHandleClient(void) {
   server.handleClient();
-}
-
-void serverSetExternalStatePointers(volatile bool* ledPtr,
-                                    volatile bool* sStatePtr, uint8_t btnCount,
-                                    unsigned long* startMillisPtr) {
-  g_ledPtr         = ledPtr;
-  g_sStatePtr      = sStatePtr;
-  g_btnCount       = btnCount;
-  g_startMillisPtr = startMillisPtr;
 }
